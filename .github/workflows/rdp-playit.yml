@@ -1,0 +1,89 @@
+name: "⚡ Direct RDP — Playit Tunnel (Low Latency / No Card)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      PLAYIT_SECRET_KEY:
+        description: "Paste your Playit Agent Secret Key"
+        required: true
+      PIN:
+        description: "Windows User Password (at least 8 chars recommended)"
+        required: true
+        default: "MySecurePassword123"
+
+jobs:
+  rdp-playit:
+    runs-on: windows-latest
+    steps:
+      - name: "🛡️ 1. Enable Terminal Server (RDP) & Force Config"
+        shell: pwsh
+        run: |
+          Write-Host "Enabling Remote Desktop Protocol (RDP)..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
+          
+          Write-Host "Disabling Network Level Authentication (NLA) for Tunnel Compatibility..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
+
+          Write-Host "Configuring Firewall Profiles..."
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+
+          Write-Host "Starting and restarting RDP services (TermService) to apply changes..."
+          Set-Service -Name "TermService" -StartupType Automatic
+          Restart-Service -Name "TermService" -Force -ErrorAction SilentlyContinue
+          
+          # Set Windows Audio service to Automatic and Start it
+          Set-Service -Name "Audiosrv" -StartupType Automatic
+          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
+          Start-Service -Name "Audiosrv", "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+
+      - name: "🔑 2. Configure Windows User Password & Permissions"
+        shell: pwsh
+        run: |
+          $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+          $Password = ConvertTo-SecureString "${{ github.event.inputs.PIN }}" -AsPlainText -Force
+          Set-LocalUser -Name $username -Password $Password
+          
+          Write-Host "Adding $username to Remote Desktop Users group..."
+          Add-LocalGroupMember -Group "Remote Desktop Users" -Member $username -ErrorAction SilentlyContinue
+          Write-Host "Password updated for user: $username"
+
+      - name: "📥 3. Download & Configure Playit Agent"
+        shell: pwsh
+        run: |
+          $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+          
+          Write-Host "Downloading Playit.gg Windows Client..."
+          $url = "https://github.com/playit-cloud/playit-agent/releases/download/v0.15.13/playit-windows-x86_64.exe"
+          $exePath = "$env:TEMP\playit.exe"
+          Invoke-WebRequest -Uri $url -OutFile $exePath
+
+          Write-Host "Configuring Playit Secret Key..."
+          $playitFolder = "$env:LOCALAPPDATA\playit_gg"
+          if (-not (Test-Path $playitFolder)) { New-Item -ItemType Directory -Path $playitFolder -Force | Out-Null }
+          
+          # نوشتن کلید مخفی در فایل کانفیگ استاندارد Playit
+          "secret_key = `"${{ github.event.inputs.PLAYIT_SECRET_KEY }}`"" | Out-File -FilePath "$playitFolder\playit.toml" -Encoding utf8 -Force
+
+          Write-Host "Starting Playit.gg Tunnel Client in background..."
+          Start-Process -FilePath $exePath -NoNewWindow -PassThru
+
+          Write-Host "==============================================="
+          Write-Host "🎉 Playit Tunnel is Connected!"
+          Write-Host "Username     : $username"
+          Write-Host "Password     : ${{ github.event.inputs.PIN }}"
+          Write-Host "==============================================="
+          Write-Host "Please connect to your static playit.gg address using mstsc."
+          Write-Host "==============================================="
+
+      - name: "🔁 4. Keep Alive Loop"
+        shell: pwsh
+        run: |
+          $timeout = New-TimeSpan -Hours 6
+          $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+          while ($stopwatch.Elapsed -lt $timeout) {
+              $remaining = $timeout - $stopwatch.Elapsed
+              Write-Host "Running... Time elapsed: $($stopwatch.Elapsed.ToString('hh\:mm\:ss')) (Remaining: $($remaining.ToString('hh\:mm\:ss')))"
+              Start-Sleep -Seconds 60
+          }
