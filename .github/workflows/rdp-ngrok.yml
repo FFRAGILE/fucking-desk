@@ -1,4 +1,4 @@
-name: "⚡ Direct RDP — Serveo Tunnel (No Card)"
+name: "⚡ Direct RDP — Bore Tunnel (No Card)"
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         default: "MySecurePassword123"
 
 jobs:
-  rdp-serveo:
+  rdp-bore:
     runs-on: windows-latest
     steps:
       - name: "🛡️ 1. Enable Terminal Server (RDP)"
@@ -24,7 +24,7 @@ jobs:
           Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
           Start-Service -Name "Audiosrv", "AudioEndpointBuilder" -ErrorAction SilentlyContinue
 
-      - name: "🔑 2. Configure Windows User & Generate SSH Key"
+      - name: "🔑 2. Configure Windows User Password"
         shell: pwsh
         run: |
           $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
@@ -32,34 +32,38 @@ jobs:
           Set-LocalUser -Name $username -Password $Password
           Write-Host "Password updated for user: $username"
 
-          # تولید کلید امنیتی موقت برای احراز هویت با سرور Serveo
-          Write-Host "Generating dummy SSH key pair for tunneling..."
-          $sshDir = "$env:USERPROFILE\.ssh"
-          if (-not (Test-Path $sshDir)) { New-Item -ItemType Directory -Path $sshDir -Force | Out-Null }
-          ssh-keygen -t rsa -b 2048 -N '""' -f "$sshDir\id_rsa" -q
-
-      - name: "📥 3. Establish Serveo SSH Tunnel"
+      - name: "📥 3. Download & Run Bore TCP Tunnel"
         shell: pwsh
         run: |
           $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
-          $logPath = "$env:TEMP\serveo.log"
-          $errPath = "$env:TEMP\serveo_err.log"
+          $logPath = "$env:TEMP\bore.log"
+          $errPath = "$env:TEMP\bore_err.log"
           
           if (Test-Path $logPath) { Remove-Item $logPath -Force }
           if (Test-Path $errPath) { Remove-Item $errPath -Force }
 
-          Write-Host "Starting Serveo SSH tunnel on port 3389..."
-          # Start SSH tunnel in background and redirect output to logs
-          $session = Start-Process ssh -ArgumentList "-o StrictHostKeyChecking=no -R 0:127.0.0.1:3389 serveo.net" -NoNewWindow -PassThru -RedirectStandardOutput $logPath -RedirectStandardError $errPath
+          Write-Host "Downloading Bore TCP Tunnel Client..."
+          # دانلود نسخه ویندوزی پایدار و رسمی Bore از گیت‌هاب سازنده
+          $url = "https://github.com/ekzhang/bore/releases/download/v0.6.0/bore-v0.6.0-x86_64-pc-windows-msvc.zip"
+          $zipPath = "$env:TEMP\bore.zip"
+          $extractPath = "$env:TEMP\bore"
+          
+          Invoke-WebRequest -Uri $url -OutFile $zipPath
+          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+          $borePath = "$extractPath\bore.exe"
 
-          Write-Host "Waiting for Serveo to allocate a port..."
+          Write-Host "Starting Bore TCP tunnel on port 3389..."
+          # اجرای تانل روی پورت ویندوز و هدایت لاگ‌ها به فایل موقت
+          $session = Start-Process -FilePath $borePath -ArgumentList "local 3389 --to bore.pub" -NoNewWindow -PassThru -RedirectStandardOutput $logPath -RedirectStandardError $errPath
+
+          Write-Host "Waiting for Bore to allocate a port..."
           $address = $null
           for ($i = 0; $i -lt 15; $i++) {
               Start-Sleep -Seconds 2
               if (Test-Path $logPath) {
                   $content = Get-Content $logPath -Raw
-                  # Search for allocated port pattern (e.g. serveo.net:12345)
-                  if ($content -match 'serveo\.net:\d+') {
+                  # پیدا کردن آدرس تخصیص یافته (مثلاً bore.pub:12345)
+                  if ($content -match 'bore\.pub:\d+') {
                       $address = $Matches[0]
                       break
                   }
@@ -69,23 +73,23 @@ jobs:
           if (-not $address) {
               if (Test-Path $errPath) {
                   Write-Host "==============================================="
-                  Write-Host "❌ Error Log from SSH Client:"
+                  Write-Host "❌ Error Log from Bore Tunnel Client:"
                   Get-Content $errPath
                   Write-Host "==============================================="
               }
-              Write-Error "Failed to generate Serveo tunnel. Please try running the workflow again!"
+              Write-Error "Failed to generate Bore tunnel. Please try running the workflow again!"
               exit 1
           }
 
           Write-Host "==============================================="
-          Write-Host "🎉 RDP Connection Details (Serveo):"
+          Write-Host "🎉 RDP Connection Details (Bore):"
           Write-Host "IP / Address : $address"
           Write-Host "Username     : $username"
           Write-Host "Password     : ${{ github.event.inputs.PIN }}"
           Write-Host "==============================================="
           Write-Host "Instructions:"
           Write-Host "1. Open Remote Desktop Connection (mstsc) on your local PC."
-          Write-Host "2. Enter the IP/Address shown above (e.g., serveo.net:12345)."
+          Write-Host "2. Enter the IP/Address shown above (e.g., bore.pub:51234)."
           Write-Host "3. Enter the Username and Password."
           Write-Host "==============================================="
 
