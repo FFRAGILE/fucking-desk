@@ -24,13 +24,19 @@ jobs:
           Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
           Start-Service -Name "Audiosrv", "AudioEndpointBuilder" -ErrorAction SilentlyContinue
 
-      - name: "🔑 2. Configure Windows User Password"
+      - name: "🔑 2. Configure Windows User & Generate SSH Key"
         shell: pwsh
         run: |
           $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
           $Password = ConvertTo-SecureString "${{ github.event.inputs.PIN }}" -AsPlainText -Force
           Set-LocalUser -Name $username -Password $Password
           Write-Host "Password updated for user: $username"
+
+          # تولید کلید امنیتی موقت برای احراز هویت با سرور Serveo
+          Write-Host "Generating dummy SSH key pair for tunneling..."
+          $sshDir = "$env:USERPROFILE\.ssh"
+          if (-not (Test-Path $sshDir)) { New-Item -ItemType Directory -Path $sshDir -Force | Out-Null }
+          ssh-keygen -t rsa -b 2048 -N '""' -f "$sshDir\id_rsa" -q
 
       - name: "📥 3. Establish Serveo SSH Tunnel"
         shell: pwsh
@@ -61,11 +67,13 @@ jobs:
           }
 
           if (-not $address) {
-              Write-Error "Failed to generate Serveo tunnel. Please try running the workflow again!"
               if (Test-Path $errPath) {
-                  Write-Host "Error Log from SSH Client:"
+                  Write-Host "==============================================="
+                  Write-Host "❌ Error Log from SSH Client:"
                   Get-Content $errPath
+                  Write-Host "==============================================="
               }
+              Write-Error "Failed to generate Serveo tunnel. Please try running the workflow again!"
               exit 1
           }
 
