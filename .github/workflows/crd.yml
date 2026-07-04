@@ -36,19 +36,40 @@ jobs:
     if: github.event.inputs.OS == 'Windows'
     runs-on: windows-latest
     steps:
-      - name: "🔊 1. Pre-configure Audio Devices (Before GCRD Start)"
+      - name: "🔊 1. Direct Install VB-Cable Audio (Before GCRD Start)"
         shell: pwsh
         run: |
-          Write-Host "Configuring and Starting Windows Audio Services..."
-          Set-Service -Name "Audiosrv" -StartupType Automatic
-          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
-          Start-Service -Name "Audiosrv", "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+          try {
+              Write-Host "Configuring and Starting Windows Audio Services..."
+              Set-Service -Name "Audiosrv" -StartupType Automatic
+              Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
+              Start-Service -Name "Audiosrv", "AudioEndpointBuilder" -ErrorAction SilentlyContinue
 
-          Write-Host "Installing VB-Audio Cable for Sound..."
-          choco install vb-cable -y --no-progress
-          
-          Write-Host "Forcing Windows to reload audio endpoints..."
-          Restart-Service -Name "Audiosrv", "AudioEndpointBuilder" -Force -ErrorAction SilentlyContinue
+              Write-Host "Downloading VB-Audio Cable zip package..."
+              $url = "https://download.vb-audio.com/Download_CABLE/VBCABLE_Driver_Pack45.zip"
+              $zipPath = "$env:TEMP\VBCABLE_Driver_Pack45.zip"
+              $extractPath = "$env:TEMP\VBCABLE_Extract"
+              
+              if (Test-Path $extractPath) { Remove-Item $extractPath -Recurse -Force -ErrorAction SilentlyContinue }
+              New-Item -ItemType Directory -Path $extractPath -Force | Out-Null
+              
+              Invoke-WebRequest -Uri $url -OutFile $zipPath
+              Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+              
+              Write-Host "Installing VB-Audio Cable Driver silently (using native -i -h)..."
+              $installerPath = "$extractPath\VBCABLE_Setup_x64.exe"
+              if (Test-Path $installerPath) {
+                  Start-Process -FilePath $installerPath -ArgumentList "-i", "-h" -NoNewWindow -Wait
+                  Write-Host "VB-Audio Cable Driver installation process completed."
+              } else {
+                  Write-Host "Installer VBCABLE_Setup_x64.exe not found!"
+              }
+              
+              Write-Host "Forcing Windows to reload audio endpoints..."
+              Restart-Service -Name "Audiosrv", "AudioEndpointBuilder" -Force -ErrorAction SilentlyContinue
+          } catch {
+              Write-Host "⚠️ Audio setup failed: $($_.Exception.Message)"
+          }
 
       - name: "🛡️ 2. Disable Firewall & Enable Terminal Server"
         shell: pwsh
@@ -60,21 +81,21 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: "☁️ 3. Install & Start Cloudflare WARP (If selected)"
+      - name: "☁️ 3. Direct Install & Start Cloudflare WARP (If selected)"
         shell: pwsh
         run: |
           if ("${{ github.event.inputs.WARP }}" -eq "true") {
               try {
                   Write-Host "Downloading Cloudflare WARP MSI directly from Cloudflare..."
-                  $msiUrl = "https://www.cloudflarewarp.com/Cloudflare_WARP_Release-x64.msi"
+                  $msiUrl = "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
                   $msiPath = "$env:TEMP\Cloudflare_WARP_Release-x64.msi"
                   Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
                   
-                  Write-Host "Installing Cloudflare WARP silently..."
+                  Write-Host "Installing Cloudflare WARP silently via msiexec..."
                   Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
                   
-                  Write-Host "Waiting 10 seconds for Cloudflare service initialization..."
-                  Start-Sleep -Seconds 10
+                  Write-Host "Waiting 15 seconds for Cloudflare service initialization..."
+                  Start-Sleep -Seconds 15
                   Get-Service -Name "Cloudflare WARP" | Start-Service -ErrorAction SilentlyContinue
 
                   $warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
@@ -88,7 +109,7 @@ jobs:
                       Write-Host "WARP CLI path not found. You can still connect manually inside the RDP desktop."
                   }
               } catch {
-                  Write-Host "⚠️ WARP connection failed to start automatically, but RDP boot will continue. You can open WARP manually inside desktop."
+                  Write-Host "⚠️ WARP connection failed to start automatically: $($_.Exception.Message)"
               }
           } else {
               Write-Host "Cloudflare WARP is disabled by user."
