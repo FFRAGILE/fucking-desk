@@ -1,4 +1,4 @@
-name: "⚡ Unified Cloud — Windows & Linux RDP"
+name: "⚡ Advanced Unified Cloud — Windows & Linux"
 
 on:
   workflow_dispatch:
@@ -18,6 +18,15 @@ on:
         description: "CRD PIN (6+ digits). Default 123456"
         required: false
         default: "123456"
+      COMPUTER_NAME:
+        description: "Custom Computer Name in Google Remote Desktop"
+        required: false
+        default: "MyCloudPC"
+      WARP:
+        description: "Enable Cloudflare WARP (VPN/Proxy Bypass)"
+        type: boolean
+        required: false
+        default: true
 
 jobs:
   # ==============================
@@ -27,7 +36,21 @@ jobs:
     if: github.event.inputs.OS == 'Windows'
     runs-on: windows-latest
     steps:
-      - name: "📥 Prepare & Install Chrome Remote Desktop"
+      - name: "🔊 1. Pre-configure Audio Devices (Before GCRD Start)"
+        shell: pwsh
+        run: |
+          Write-Host "Configuring and Starting Windows Audio Services..."
+          Set-Service -Name "Audiosrv" -StartupType Automatic
+          Set-Service -Name "AudioEndpointBuilder" -StartupType Automatic
+          Start-Service -Name "Audiosrv", "AudioEndpointBuilder" -ErrorAction SilentlyContinue
+
+          Write-Host "Installing VB-Audio Cable for Sound..."
+          choco install vb-cable -y --no-progress
+          
+          Write-Host "Forcing Windows to reload audio endpoints..."
+          Restart-Service -Name "Audiosrv", "AudioEndpointBuilder" -Force -ErrorAction SilentlyContinue
+
+      - name: "🛡️ 2. Disable Firewall & Enable Terminal Server"
         shell: pwsh
         run: |
           Write-Host "Disabling Windows Firewall to allow WebRTC..."
@@ -37,6 +60,31 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
+      - name: "☁️ 3. Install & Start Cloudflare WARP (If selected)"
+        shell: pwsh
+        run: |
+          if ("${{ github.event.inputs.WARP }}" -eq "true") {
+              Write-Host "Installing Cloudflare WARP..."
+              choco install cloudflare-warp -y --no-progress
+              
+              Write-Host "Registering and Connecting Cloudflare WARP..."
+              # Path to warp-cli in Windows Actions
+              $warpCli = "C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+              if (Test-Path $warpCli) {
+                  & $warpCli --accept-tos registration new
+                  & $warpCli --accept-tos mode warp
+                  & $warpCli --accept-tos connect
+                  Write-Host "Cloudflare WARP connected successfully!"
+              } else {
+                  Write-Host "WARP CLI path not found. Skipping auto-connect..."
+              }
+          } else {
+              Write-Host "Cloudflare WARP is disabled by user."
+          }
+
+      - name: "📥 4. Download Chrome Remote Desktop"
+        shell: pwsh
+        run: |
           Write-Host "Downloading Chrome Remote Desktop..."
           $msiUrl = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
           $msiPath = "$env:TEMP\crdhost.msi"
@@ -44,31 +92,33 @@ jobs:
           
           Write-Host "Installing Chrome Remote Desktop..."
           Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
-          
-          Write-Host "Installing VB-Audio Cable for Sound..."
-          try {
-              choco install vb-cable -y --no-progress
-          } catch {
-              Write-Host "Could not install VB-Audio. Continuing..."
-          }
 
-      - name: "🌟 Connect & Start RDP (Windows)"
+      - name: "🌟 5. Connect & Start RDP (Windows)"
         shell: pwsh
         run: |
           $Code = @"
           ${{ github.event.inputs.CODE }}
           "@
           $Pin = "${{ github.event.inputs.PIN }}"
+          $CustomName = "${{ github.event.inputs.COMPUTER_NAME }}"
+
+          # Append PIN if not present
           if ($Code -notlike "*--pin=*") {
               $Code = $Code + " --pin=$Pin"
           }
-          Write-Host "Executing CRD command..."
+
+          # Dynamically replace computer name parameters to use your custom name
+          $Code = $Code -replace '--name=[^\s]+', "--name=`"$CustomName`""
+          $Code = $Code -replace '--name-prefix=[^\s]+', "--name-prefix=`"$CustomName`""
+
+          Write-Host "Executing GCRD command with custom name: $CustomName"
           Invoke-Expression $Code
+          
           Write-Host "==============================================="
-          Write-Host "Windows RDP configured! PIN: $Pin"
+          Write-Host "Windows RDP configured under name: $CustomName"
           Write-Host "==============================================="
 
-      - name: "🔁 Keep Alive Loop (Windows)"
+      - name: "🔁 6. Keep Alive Loop (Windows)"
         shell: pwsh
         run: |
           $timeout = New-TimeSpan -Hours 6
@@ -86,7 +136,7 @@ jobs:
     if: github.event.inputs.OS == 'Linux (Ubuntu)'
     runs-on: ubuntu-latest
     steps:
-      - name: "📥 Install Desktop, PulseAudio & GCRD"
+      - name: "📥 1. Install Desktop, PulseAudio & GCRD"
         run: |
           sudo apt-get update
           
@@ -100,7 +150,23 @@ jobs:
           wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
           sudo dpkg -i chrome-remote-desktop_current_amd64.deb || sudo apt-get install -f -y
 
-      - name: "⚙️ Configure Desktop Session & Pre-start Sound"
+      - name: "☁️ 2. Install & Connect Cloudflare WARP (If selected)"
+        run: |
+          if [ "${{ github.event.inputs.WARP }}" = "true" ]; then
+              echo "Adding Cloudflare repository..."
+              curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+              echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
+              sudo apt-get update && sudo apt-get install -y cloudflare-warp
+              
+              echo "Registering and connecting Cloudflare WARP..."
+              warp-cli --accept-tos registration new
+              warp-cli --accept-tos connect
+              echo "Cloudflare WARP has been configured!"
+          else
+              echo "Cloudflare WARP is disabled by user."
+          fi
+
+      - name: "⚙️ 3. Configure Desktop Session & Pre-start Sound"
         run: |
           echo "Configuring XFCE session for Chrome Remote Desktop..."
           echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > ~/.chrome-remote-desktop-session
@@ -112,17 +178,22 @@ jobs:
           pulseaudio --kill || true
           pulseaudio --start --daemonize
 
-      - name: "🌟 Connect & Start RDP (Linux)"
+      - name: "🌟 4. Connect & Start RDP (Linux)"
         run: |
           CODE_INPUT="${{ github.event.inputs.CODE }}"
           PIN_INPUT="${{ github.event.inputs.PIN }}"
+          CUSTOM_NAME="${{ github.event.inputs.COMPUTER_NAME }}"
           
           # Clean up code format and ensure PIN is appended
           if [[ "$CODE_INPUT" != *"--pin="* ]]; then
             CODE_INPUT="$CODE_INPUT --pin=$PIN_INPUT"
           fi
+
+          # Replace computer name/prefix in command string with your custom name
+          CODE_INPUT=$(echo "$CODE_INPUT" | sed -E "s/--name=[^ ]+/--name=\"$CUSTOM_NAME\"/g")
+          CODE_INPUT=$(echo "$CODE_INPUT" | sed -E "s/--name-prefix=[^ ]+/--name-prefix=\"$CUSTOM_NAME\"/g")
           
-          echo "Executing Chrome Remote Desktop headless registration..."
+          echo "Executing Chrome Remote Desktop headless registration with name: $CUSTOM_NAME"
           eval "$CODE_INPUT"
           
           echo "==============================================="
@@ -131,7 +202,7 @@ jobs:
           echo "And connect using your PIN: $PIN_INPUT"
           echo "==============================================="
 
-      - name: "🔁 Keep Alive Loop (Linux)"
+      - name: "🔁 5. Keep Alive Loop (Linux)"
         run: |
           echo "Keeping runner alive for up to 6 hours..."
           timeout 6h bash -c '
