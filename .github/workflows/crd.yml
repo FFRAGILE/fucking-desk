@@ -1,10 +1,18 @@
-name: "⚡ Direct GitHub — Windows 10/11 RDP"
+name: "⚡ Unified Cloud — Windows & Linux RDP"
 
 on:
   workflow_dispatch:
     inputs:
+      OS:
+        description: "Select Operating System to Run"
+        required: true
+        default: "Windows"
+        type: choice
+        options:
+          - "Windows"
+          - "Linux (Ubuntu)"
       CODE:
-        description: "PowerShell command from https://remotedesktop.google.com/headless"
+        description: "Paste the headless command from https://remotedesktop.google.com/headless"
         required: true
       PIN:
         description: "CRD PIN (6+ digits). Default 123456"
@@ -12,12 +20,23 @@ on:
         default: "123456"
 
 jobs:
-  rdp-setup:
+  # ==============================
+  # بخش اول: راه‌اندازی ویندوز ۱۰
+  # ==============================
+  windows-rdp:
+    if: github.event.inputs.OS == 'Windows'
     runs-on: windows-latest
     steps:
       - name: "📥 Prepare & Install Chrome Remote Desktop"
         shell: pwsh
         run: |
+          Write-Host "Disabling Windows Firewall to allow WebRTC..."
+          Set-NetFirewallProfile -Profile Domain,Public,Private -Enabled False
+
+          Write-Host "Enabling Terminal Server (Remote Desktop) in Registry..."
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+
           Write-Host "Downloading Chrome Remote Desktop..."
           $msiUrl = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
           $msiPath = "$env:TEMP\crdhost.msi"
@@ -28,40 +47,30 @@ jobs:
           
           Write-Host "Installing VB-Audio Cable for Sound..."
           try {
-              # This installs Virtual Audio Cable via Chocolatey to enable sound redirection
               choco install vb-cable -y --no-progress
           } catch {
-              Write-Host "Could not install VB-Audio. Continuing without sound..."
+              Write-Host "Could not install VB-Audio. Continuing..."
           }
 
-      - name: "🌟 Connect & Start RDP"
+      - name: "🌟 Connect & Start RDP (Windows)"
         shell: pwsh
         run: |
           $Code = @"
           ${{ github.event.inputs.CODE }}
           "@
-          
           $Pin = "${{ github.event.inputs.PIN }}"
-          
-          # Clean up the command and ensure PIN is appended if not present
           if ($Code -notlike "*--pin=*") {
               $Code = $Code + " --pin=$Pin"
           }
-          
           Write-Host "Executing CRD command..."
-          # Running the command
           Invoke-Expression $Code
-          
           Write-Host "==============================================="
-          Write-Host "RDP is successfully configured!"
-          Write-Host "Go to https://remotedesktop.google.com/access"
-          Write-Host "And connect using your PIN: $Pin"
+          Write-Host "Windows RDP configured! PIN: $Pin"
           Write-Host "==============================================="
 
-      - name: "🔁 Keep Alive Loop"
+      - name: "🔁 Keep Alive Loop (Windows)"
         shell: pwsh
         run: |
-          Write-Host "Keeping runner alive for up to 6 hours..."
           $timeout = New-TimeSpan -Hours 6
           $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
           while ($stopwatch.Elapsed -lt $timeout) {
@@ -69,3 +78,65 @@ jobs:
               Write-Host "Running... Time elapsed: $($stopwatch.Elapsed.ToString('hh\:mm\:ss')) (Remaining: $($remaining.ToString('hh\:mm\:ss')))"
               Start-Sleep -Seconds 60
           }
+
+  # ==============================
+  # بخش دوم: راه‌اندازی اوبونتو لینوکس
+  # ==============================
+  linux-rdp:
+    if: github.event.inputs.OS == 'Linux (Ubuntu)'
+    runs-on: ubuntu-latest
+    steps:
+      - name: "📥 Install Desktop, PulseAudio & GCRD"
+        run: |
+          sudo apt-get update
+          
+          echo "Installing lightweight XFCE4 desktop environment..."
+          sudo apt-get install -y xfce4 xfce4-goodies xvfb DBus-x11
+          
+          echo "Installing PulseAudio for sound support..."
+          sudo apt-get install -y pulseaudio pavucontrol
+          
+          echo "Downloading & installing Chrome Remote Desktop..."
+          wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
+          sudo dpkg -i chrome-remote-desktop_current_amd64.deb || sudo apt-get install -f -y
+
+      - name: "⚙️ Configure Desktop Session & Pre-start Sound"
+        run: |
+          echo "Configuring XFCE session for Chrome Remote Desktop..."
+          echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > ~/.chrome-remote-desktop-session
+          
+          echo "Adding user to chrome-remote-desktop group..."
+          sudo usermod -a -G chrome-remote-desktop $USER
+          
+          echo "Initializing and starting PulseAudio Sound Server in background..."
+          pulseaudio --kill || true
+          pulseaudio --start --daemonize
+
+      - name: "🌟 Connect & Start RDP (Linux)"
+        run: |
+          CODE_INPUT="${{ github.event.inputs.CODE }}"
+          PIN_INPUT="${{ github.event.inputs.PIN }}"
+          
+          # Clean up code format and ensure PIN is appended
+          if [[ "$CODE_INPUT" != *"--pin="* ]]; then
+            CODE_INPUT="$CODE_INPUT --pin=$PIN_INPUT"
+          fi
+          
+          echo "Executing Chrome Remote Desktop headless registration..."
+          eval "$CODE_INPUT"
+          
+          echo "==============================================="
+          echo "Linux RDP is successfully configured!"
+          echo "Go to https://remotedesktop.google.com/access"
+          echo "And connect using your PIN: $PIN_INPUT"
+          echo "==============================================="
+
+      - name: "🔁 Keep Alive Loop (Linux)"
+        run: |
+          echo "Keeping runner alive for up to 6 hours..."
+          timeout 6h bash -c '
+            while true; do
+              echo "Server is running..."
+              sleep 60
+            done
+          '
