@@ -1,18 +1,15 @@
-name: "⚡ Direct RDP — Ngrok Tunnel"
+name: "⚡ Direct RDP — Serveo Tunnel (No Card)"
 
 on:
   workflow_dispatch:
     inputs:
-      NGROK_TOKEN:
-        description: "Paste your Ngrok Authtoken from dashboard.ngrok.com"
-        required: true
       PIN:
         description: "Windows User Password (at least 8 chars recommended)"
         required: true
         default: "MySecurePassword123"
 
 jobs:
-  rdp-ngrok:
+  rdp-serveo:
     runs-on: windows-latest
     steps:
       - name: "🛡️ 1. Enable Terminal Server (RDP)"
@@ -35,52 +32,52 @@ jobs:
           Set-LocalUser -Name $username -Password $Password
           Write-Host "Password updated for user: $username"
 
-      - name: "📥 3. Download and Run Ngrok Tunnel"
+      - name: "📥 3. Establish Serveo SSH Tunnel"
         shell: pwsh
         run: |
-          Write-Host "Downloading Ngrok..."
-          $url = "https://bin.equinox.io/c/b341edd2yjk/ngrok-v3-stable-windows-amd64.zip"
-          $zipPath = "$env:TEMP\ngrok.zip"
-          $extractPath = "$env:TEMP\ngrok"
+          $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+          $logPath = "$env:TEMP\serveo.log"
+          $errPath = "$env:TEMP\serveo_err.log"
           
-          Invoke-WebRequest -Uri $url -OutFile $zipPath
-          Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-          $ngrokPath = "$extractPath\ngrok.exe"
+          if (Test-Path $logPath) { Remove-Item $logPath -Force }
+          if (Test-Path $errPath) { Remove-Item $errPath -Force }
 
-          Write-Host "Configuring Ngrok Authtoken..."
-          & $ngrokPath config add-authtoken "${{ github.event.inputs.NGROK_TOKEN }}"
+          Write-Host "Starting Serveo SSH tunnel on port 3389..."
+          # Start SSH tunnel in background and redirect output to logs
+          $session = Start-Process ssh -ArgumentList "-o StrictHostKeyChecking=no -R 0:127.0.0.1:3389 serveo.net" -NoNewWindow -PassThru -RedirectStandardOutput $logPath -RedirectStandardError $errPath
 
-          Write-Host "Starting Ngrok TCP tunnel on port 3389..."
-          Start-Process -FilePath $ngrokPath -ArgumentList "tcp 3389" -WindowStyle Hidden
-          
-          Write-Host "Waiting for public address to be generated..."
-          $publicUrl = $null
+          Write-Host "Waiting for Serveo to allocate a port..."
+          $address = $null
           for ($i = 0; $i -lt 15; $i++) {
-              try {
-                  $tunnels = Invoke-RestMethod -Uri "http://127.0.0.1:4040/api/tunnels"
-                  $publicUrl = $tunnels.tunnels[0].public_url
-                  if ($publicUrl) { break }
-              } catch {}
               Start-Sleep -Seconds 2
+              if (Test-Path $logPath) {
+                  $content = Get-Content $logPath -Raw
+                  # Search for allocated port pattern (e.g. serveo.net:12345)
+                  if ($content -match 'serveo\.net:\d+') {
+                      $address = $Matches[0]
+                      break
+                  }
+              }
           }
 
-          if (-not $publicUrl) {
-              Write-Error "Failed to generate Ngrok tunnel. Please check if your Token is valid!"
+          if (-not $address) {
+              Write-Error "Failed to generate Serveo tunnel. Please try running the workflow again!"
+              if (Test-Path $errPath) {
+                  Write-Host "Error Log from SSH Client:"
+                  Get-Content $errPath
+              }
               exit 1
           }
 
-          # Clean the tcp:// prefix from ngrok URL
-          $cleanUrl = $publicUrl -replace 'tcp://', ''
-
           Write-Host "==============================================="
-          Write-Host "🎉 RDP Connection Details:"
-          Write-Host "IP / Address : $cleanUrl"
+          Write-Host "🎉 RDP Connection Details (Serveo):"
+          Write-Host "IP / Address : $address"
           Write-Host "Username     : $username"
           Write-Host "Password     : ${{ github.event.inputs.PIN }}"
           Write-Host "==============================================="
           Write-Host "Instructions:"
           Write-Host "1. Open Remote Desktop Connection (mstsc) on your local PC."
-          Write-Host "2. Enter the IP/Address shown above."
+          Write-Host "2. Enter the IP/Address shown above (e.g., serveo.net:12345)."
           Write-Host "3. Enter the Username and Password."
           Write-Host "==============================================="
 
