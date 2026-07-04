@@ -1,12 +1,10 @@
-# ⚡ EnigMano Pro — Unified Cloud Instance (Windows & Linux)
+# ⚡  Pro — Unified Cloud Instance (Windows & Linux)
 
 [English](#english-documentation) | [راهنمای فارسی](#راهنمای-فارسی-farsi-guide)
 
 ---
 
 ## راهنمای فارسی (Farsi Guide)
-
-پروژه **EnigMano Pro** یک ابزار خودکارسازی امن برای راه‌اندازی سرورهای مجازی رایگان ویندوز ۱۰ و لینوکس اوبونتو با منابع سخت‌افزاری قدرتمند (۱۶ گیگابایت رم و پردازنده چند هسته‌ای) از طریق سرویس **GitHub Actions** و دسترسی گرافیکی **Google Chrome Remote Desktop (GCRD)** است.
 
 ### 🌟 ویژگی‌های برجسته نسخه جدید:
 * **سرعت شبکه فوق‌سریع:** دسترسی به پهنای باند گیگابیتی دیتاسنتر ابری مایکروسافت.
