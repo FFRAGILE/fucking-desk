@@ -1,0 +1,71 @@
+name: "⚡ Direct GitHub — Windows 10/11 RDP"
+
+on:
+  workflow_dispatch:
+    inputs:
+      CODE:
+        description: "PowerShell command from https://remotedesktop.google.com/headless"
+        required: true
+      PIN:
+        description: "CRD PIN (6+ digits). Default 123456"
+        required: false
+        default: "123456"
+
+jobs:
+  rdp-setup:
+    runs-on: windows-latest
+    steps:
+      - name: "📥 Prepare & Install Chrome Remote Desktop"
+        shell: pwsh
+        run: |
+          Write-Host "Downloading Chrome Remote Desktop..."
+          $msiUrl = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
+          $msiPath = "$env:TEMP\crdhost.msi"
+          Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
+          
+          Write-Host "Installing Chrome Remote Desktop..."
+          Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
+          
+          Write-Host "Installing VB-Audio Cable for Sound..."
+          try {
+              # This installs Virtual Audio Cable via Chocolatey to enable sound redirection
+              choco install vb-cable -y --no-progress
+          } catch {
+              Write-Host "Could not install VB-Audio. Continuing without sound..."
+          }
+
+      - name: "🌟 Connect & Start RDP"
+        shell: pwsh
+        run: |
+          $Code = @"
+          ${{ github.event.inputs.CODE }}
+          "@
+          
+          $Pin = "${{ github.event.inputs.PIN }}"
+          
+          # Clean up the command and ensure PIN is appended if not present
+          if ($Code -notlike "*--pin=*") {
+              $Code = $Code + " --pin=$Pin"
+          }
+          
+          Write-Host "Executing CRD command..."
+          # Running the command
+          Invoke-Expression $Code
+          
+          Write-Host "==============================================="
+          Write-Host "RDP is successfully configured!"
+          Write-Host "Go to https://remotedesktop.google.com/access"
+          Write-Host "And connect using your PIN: $Pin"
+          Write-Host "==============================================="
+
+      - name: "🔁 Keep Alive Loop"
+        shell: pwsh
+        run: |
+          Write-Host "Keeping runner alive for up to 6 hours..."
+          $timeout = New-TimeSpan -Hours 6
+          $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
+          while ($stopwatch.Elapsed -lt $timeout) {
+              $remaining = $timeout - $stopwatch.Elapsed
+              Write-Host "Running... Time elapsed: $($stopwatch.Elapsed.ToString('hh\:mm\:ss')) (Remaining: $($remaining.ToString('hh\:mm\:ss')))"
+              Start-Sleep -Seconds 60
+          }
