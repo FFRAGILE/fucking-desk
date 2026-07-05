@@ -1,4 +1,4 @@
-name: "⚡ Advanced Unified Cloud — Windows & Linux"
+name: "⚡ Pro Unified Cloud — Windows & Linux"
 
 on:
   workflow_dispatch:
@@ -27,16 +27,41 @@ on:
         type: boolean
         required: false
         default: true
+      DOWNLOAD_URL:
+        description: "Optional: Paste a direct link to download a file straight to your Desktop before login"
+        required: false
+        default: ""
 
 jobs:
   # ==============================
-  # بخش اول: راه‌اندازی ویندوز ۱۰
+  # بخش اول: راه‌اندازی ویندوز سرور بهینه‌سازی شده
   # ==============================
   windows-rdp:
     if: github.event.inputs.OS == 'Windows'
     runs-on: windows-latest
     steps:
-      - name: "🔊 1. Direct Install VB-Cable Audio (Before GCRD Start)"
+      - name: "💾 1. Free Up Disk Space (+40GB Extra Space)"
+        shell: pwsh
+        run: |
+          Write-Host "Cleaning up heavy and unused SDKs to maximize C: drive space..."
+          $targets = @("C:\android", "C:\Selenium", "C:\Microsoft")
+          foreach ($t in $targets) {
+              if (Test-Path $t) {
+                  Write-Host "Deleting $t..."
+                  Remove-Item $t -Recurse -Force -ErrorAction SilentlyContinue
+              }
+          }
+          Write-Host "Disk cleanup finished."
+
+      - name: "⚡ 2. Performance & Visual Optimizations"
+        shell: pwsh
+        run: |
+          Write-Host "Optimizing system performance for low latency RDP..."
+          reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFXSetting /t REG_DWORD /d 2 /f
+          Stop-Service -Name "WSearch" -Force -ErrorAction SilentlyContinue
+          Set-Service -Name "WSearch" -StartupType Disabled
+
+      - name: "🔊 3. Pre-configure Audio Devices"
         shell: pwsh
         run: |
           try {
@@ -56,13 +81,10 @@ jobs:
               Invoke-WebRequest -Uri $url -OutFile $zipPath
               Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
               
-              Write-Host "Installing VB-Audio Cable Driver silently (using native -i -h)..."
+              Write-Host "Installing VB-Audio Cable Driver..."
               $installerPath = "$extractPath\VBCABLE_Setup_x64.exe"
               if (Test-Path $installerPath) {
                   Start-Process -FilePath $installerPath -ArgumentList "-i", "-h" -NoNewWindow -Wait
-                  Write-Host "VB-Audio Cable Driver installation process completed."
-              } else {
-                  Write-Host "Installer VBCABLE_Setup_x64.exe not found!"
               }
               
               Write-Host "Forcing Windows to reload audio endpoints..."
@@ -71,7 +93,30 @@ jobs:
               Write-Host "⚠️ Audio setup failed: $($_.Exception.Message)"
           }
 
-      - name: "🛡️ 2. Disable Firewall & Enable Terminal Server"
+      - name: "📦 4. Install IDM, WinRAR, VLC & qBittorrent (Before Login)"
+        shell: pwsh
+        run: |
+          try {
+              Write-Host "Installing Internet Download Manager (IDM)..."
+              choco install idm -y --no-progress
+              
+              Write-Host "Activating IDM Silently..."
+              # فعال‌سازی دائمی و ایمن آی‌دی‌ام با اسکریپت IAS
+              irm https://raw.githubusercontent.com/lstprjct/IDM-Activation-Script/main/IAS.ps1 | iex -Arguments "/act", "/s"
+              
+              Write-Host "Installing WinRAR..."
+              choco install winrar -y --no-progress
+
+              Write-Host "Installing VLC Media Player..."
+              choco install vlc -y --no-progress
+
+              Write-Host "Installing qBittorrent..."
+              choco install qbittorrent -y --no-progress
+          } catch {
+              Write-Host "⚠️ Software pre-installation failed: $($_.Exception.Message)"
+          }
+
+      - name: "🛡️ 5. Disable Firewall & Enable Terminal Server"
         shell: pwsh
         run: |
           Write-Host "Disabling Windows Firewall to allow WebRTC..."
@@ -81,17 +126,17 @@ jobs:
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
 
-      - name: "☁️ 3. Direct Install & Start Cloudflare WARP (If selected)"
+      - name: "☁️ 6. Direct Install & Start Cloudflare WARP (If selected)"
         shell: pwsh
         run: |
           if ("${{ github.event.inputs.WARP }}" -eq "true") {
               try {
-                  Write-Host "Downloading Cloudflare WARP MSI directly from Cloudflare..."
+                  Write-Host "Downloading Cloudflare WARP..."
                   $msiUrl = "https://1111-releases.cloudflareclient.com/windows/Cloudflare_WARP_Release-x64.msi"
                   $msiPath = "$env:TEMP\Cloudflare_WARP_Release-x64.msi"
                   Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
                   
-                  Write-Host "Installing Cloudflare WARP silently via msiexec..."
+                  Write-Host "Installing Cloudflare WARP silently..."
                   Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
                   
                   Write-Host "Waiting 15 seconds for Cloudflare service initialization..."
@@ -105,28 +150,89 @@ jobs:
                       & $warpCli --accept-tos mode warp
                       & $warpCli --accept-tos connect
                       Write-Host "Cloudflare WARP connected successfully!"
-                  } else {
-                      Write-Host "WARP CLI path not found. You can still connect manually inside the RDP desktop."
                   }
               } catch {
-                  Write-Host "⚠️ WARP connection failed to start automatically: $($_.Exception.Message)"
+                  Write-Host "⚠️ WARP auto-connect failed: $($_.Exception.Message)"
               }
-          } else {
-              Write-Host "Cloudflare WARP is disabled by user."
           }
 
-      - name: "📥 4. Download Chrome Remote Desktop"
+      - name: "📥 7. Pre-download Custom File to Public Desktop"
+        shell: pwsh
+        run: |
+          $Url = "${{ github.event.inputs.DOWNLOAD_URL }}"
+          if ($Url) {
+              try {
+                  Write-Host "Pre-downloading file from: $Url"
+                  # استفاده از دسکتاپ عمومی و مشترک
+                  $desktopPath = "C:\Users\Public\Desktop"
+                  
+                  $fileName = [System.IO.Path]::GetFileName([System.Uri]$Url.AbsolutePath)
+                  if (-not $fileName) { $fileName = "DownloadedFile.bin" }
+                  
+                  $destPath = [System.IO.Path]::Combine($desktopPath, $fileName)
+                  
+                  Write-Host "Downloading to $destPath..."
+                  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                  Invoke-WebRequest -Uri $Url -OutFile $destPath -UseBasicParsing
+                  Write-Host "🎉 Pre-download complete! The file is on your Desktop."
+              } catch {
+                  Write-Host "⚠️ Failed to pre-download file: $($_.Exception.Message)"
+              }
+          }
+
+      - name: "📂 8. Create EnigMano Cloud Downloader Tool on Public Desktop"
+        shell: pwsh
+        run: |
+          # ساخت اسکریپت روی دسکتاپ عمومی برای دیدن صددرصدی آن پس از اولین ورود
+          $desktopPath = "C:\Users\Public\Desktop"
+          $downloaderPath = [System.IO.Path]::Combine($desktopPath, "EnigMano_Downloader.bat")
+          
+          $batContent = @'
+          @echo off
+          title EnigMano Multi-File Cloud Downloader
+          :loop
+          cls
+          echo ===================================================
+          echo       EnigMano Multi-File Cloud Downloader
+          echo ===================================================
+          echo.
+          echo Type 'exit' to close the program.
+          echo.
+          set "url="
+          set /p url="Paste your download link: "
+          if "%url%"=="" goto loop
+          if "%url%"=="exit" goto :eof
+          
+          echo.
+          echo Downloading file... Please wait.
+          powershell -Command "[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12; $desktop = 'C:\Users\Public\Desktop'; $uri = [System.Uri]'%url%'; $filename = [System.IO.Path]::GetFileName($uri.AbsolutePath); if (-not $filename) { $filename = 'download_' + (Get-Date -Format 'yyyyMMdd_HHmmss') }; $dest = [System.IO.Path]::Combine($desktop, $filename); try { Invoke-WebRequest -Uri '%url%' -OutFile $dest -UseBasicParsing; Write-Host '🎉 Download finished! File saved to Desktop.' -ForegroundColor Green } catch { Write-Host '❌ Download failed: ' $_.Exception.Message -ForegroundColor Red }"
+          
+          echo.
+          echo Press any key to download another file...
+          pause > nul
+          goto loop
+          '@
+          
+          $batContent | Out-File -FilePath $downloaderPath -Encoding ASCII -Force
+          Write-Host "EnigMano_Downloader.bat created on Public Desktop!"
+
+      - name: "📥 9. Download Chrome Remote Desktop"
         shell: pwsh
         run: |
           Write-Host "Downloading Chrome Remote Desktop..."
           $msiUrl = "https://dl.google.com/edgedl/chrome-remote-desktop/chromeremotedesktophost.msi"
           $msiPath = "$env:TEMP\crdhost.msi"
           Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath
-          
-          Write-Host "Installing Chrome Remote Desktop..."
           Start-Process msiexec.exe -ArgumentList "/i `"$msiPath`" /qn /norestart" -Wait
 
-      - name: "🌟 5. Connect & Start RDP (Windows)"
+      - name: "🔑 10. Configure Windows User Password"
+        shell: pwsh
+        run: |
+          $username = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name.Split('\')[1]
+          $Password = ConvertTo-SecureString "${{ github.event.inputs.PIN }}" -AsPlainText -Force
+          Set-LocalUser -Name $username -Password $Password
+
+      - name: "🌟 11. Connect & Start RDP (Windows)"
         shell: pwsh
         run: |
           $Code = @"
@@ -135,23 +241,20 @@ jobs:
           $Pin = "${{ github.event.inputs.PIN }}"
           $CustomName = "${{ github.event.inputs.COMPUTER_NAME }}"
 
-          # Append PIN if not present
           if ($Code -notlike "*--pin=*") {
               $Code = $Code + " --pin=$Pin"
           }
 
-          # Dynamically replace computer name parameters to use your custom name
           $Code = $Code -replace '--name=[^\s]+', "--name=`"$CustomName`""
           $Code = $Code -replace '--name-prefix=[^\s]+', "--name-prefix=`"$CustomName`""
 
-          Write-Host "Executing GCRD command with custom name: $CustomName"
+          Write-Host "Executing GCRD command..."
           Invoke-Expression $Code
-          
           Write-Host "==============================================="
           Write-Host "Windows RDP configured under name: $CustomName"
           Write-Host "==============================================="
 
-      - name: "🔁 6. Keep Alive Loop (Windows)"
+      - name: "🔁 12. Keep Alive Loop (Windows)"
         shell: pwsh
         run: |
           $timeout = New-TimeSpan -Hours 6
@@ -172,14 +275,7 @@ jobs:
       - name: "📥 1. Install Desktop, PulseAudio & GCRD"
         run: |
           sudo apt-get update
-          
-          echo "Installing lightweight XFCE4 desktop environment..."
-          sudo apt-get install -y xfce4 xfce4-goodies xvfb DBus-x11
-          
-          echo "Installing PulseAudio for sound support..."
-          sudo apt-get install -y pulseaudio pavucontrol
-          
-          echo "Downloading & installing Chrome Remote Desktop..."
+          sudo apt-get install -y xfce4 xfce4-goodies xvfb DBus-x11 pulseaudio pavucontrol
           wget https://dl.google.com/linux/direct/chrome-remote-desktop_current_amd64.deb
           sudo dpkg -i chrome-remote-desktop_current_amd64.deb || sudo apt-get install -f -y
 
@@ -191,27 +287,17 @@ jobs:
                   curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | sudo gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
                   echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/cloudflare-client.list
                   sudo apt-get update && sudo apt-get install -y cloudflare-warp
-                  
-                  echo "Registering and connecting Cloudflare WARP..."
                   warp-cli --accept-tos registration new
                   warp-cli --accept-tos connect
-                  echo "Cloudflare WARP has been configured!"
               } catch {
-                  echo "WARP auto-connect failed on Linux, but RDP setup will continue."
+                  echo "WARP auto-connect failed."
               }
-          else
-              echo "Cloudflare WARP is disabled by user."
           fi
 
       - name: "⚙️ 3. Configure Desktop Session & Pre-start Sound"
         run: |
-          echo "Configuring XFCE session for Chrome Remote Desktop..."
           echo "exec /etc/X11/Xsession /usr/bin/xfce4-session" > ~/.chrome-remote-desktop-session
-          
-          echo "Adding user to chrome-remote-desktop group..."
           sudo usermod -a -G chrome-remote-desktop $USER
-          
-          echo "Initializing and starting PulseAudio Sound Server in background..."
           pulseaudio --kill || true
           pulseaudio --start --daemonize
 
@@ -221,27 +307,16 @@ jobs:
           PIN_INPUT="${{ github.event.inputs.PIN }}"
           CUSTOM_NAME="${{ github.event.inputs.COMPUTER_NAME }}"
           
-          # Clean up code format and ensure PIN is appended
           if [[ "$CODE_INPUT" != *"--pin="* ]]; then
             CODE_INPUT="$CODE_INPUT --pin=$PIN_INPUT"
           fi
 
-          # Replace computer name/prefix in command string with your custom name
           CODE_INPUT=$(echo "$CODE_INPUT" | sed -E "s/--name=[^ ]+/--name=\"$CUSTOM_NAME\"/g")
           CODE_INPUT=$(echo "$CODE_INPUT" | sed -E "s/--name-prefix=[^ ]+/--name-prefix=\"$CUSTOM_NAME\"/g")
-          
-          echo "Executing Chrome Remote Desktop headless registration with name: $CUSTOM_NAME"
           eval "$CODE_INPUT"
-          
-          echo "==============================================="
-          echo "Linux RDP is successfully configured!"
-          echo "Go to https://remotedesktop.google.com/access"
-          echo "And connect using your PIN: $PIN_INPUT"
-          echo "==============================================="
 
       - name: "🔁 5. Keep Alive Loop (Linux)"
         run: |
-          echo "Keeping runner alive for up to 6 hours..."
           timeout 6h bash -c '
             while true; do
               echo "Server is running..."
